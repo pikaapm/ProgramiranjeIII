@@ -1,9 +1,9 @@
-// The graphical interface 
-
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
-import java.io.File;
+import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class GuiApp {
     public static void main(String[] args) {
@@ -30,9 +30,12 @@ public class GuiApp {
 
         JTextField opsField = new JTextField("blur"); // e.g. blur+edge
 
-        String[] modes = {"auto", "sequential", "parallel", "distributed", "custom"};
+        // add "mpj" to modes
+        String[] modes = {"auto", "sequential", "parallel", "distributed", "custom", "mpj"};
         JComboBox<String> modeBox = new JComboBox<>(modes);
-        JTextField threadsField = new JTextField("8");
+
+        // used as threads in "custom" and #processes in "mpj"
+        JTextField threadsField = new JTextField("4");
         threadsField.setEnabled(false);
 
         JTextArea log = new JTextArea(6, 20);
@@ -63,7 +66,7 @@ public class GuiApp {
         // Mode row
         c.gridx = 0; c.gridy = row; c.weightx = 0; panel.add(new JLabel("Mode:"), c);
         c.gridx = 1; c.gridy = row; c.weightx = 0.5; panel.add(modeBox, c);
-        c.gridx = 2; c.gridy = row; c.weightx = 0; panel.add(new JLabel("Threads (custom):"), c);
+        c.gridx = 2; c.gridy = row; c.weightx = 0; panel.add(new JLabel("Threads / Processes:"), c);
         c.gridx = 3; c.gridy = row; c.weightx = 0.5; panel.add(threadsField, c);
         row++;
 
@@ -110,7 +113,7 @@ public class GuiApp {
 
         modeBox.addActionListener(e -> {
             String m = ((String) modeBox.getSelectedItem()).toLowerCase();
-            threadsField.setEnabled("custom".equals(m));
+            threadsField.setEnabled("custom".equals(m) || "mpj".equals(m));
         });
 
         runBtn.addActionListener(e -> {
@@ -131,50 +134,101 @@ public class GuiApp {
                 return;
             }
 
-            java.util.List<String> argList = new java.util.ArrayList<>();
-            argList.add(in);
+            // make captured values final/effectively final
+            final String inPath  = in;
+            final String outPath = out;
+            final String opsStr  = ops;
+            final String mode    = modeSel;
 
-            String outNormalized = out;
-            if (!outNormalized.endsWith("/") && !outNormalized.endsWith(File.separator)) {
-                outNormalized += File.separator;
-            }
-            argList.add(outNormalized);
-
-            argList.add(ops);
-            if (!"auto".equals(modeSel)) {
-                if ("custom".equals(modeSel)) {
-                    argList.add(threadsField.getText().trim());
-                } else {
-                    argList.add(modeSel); 
-                }
-            }
-
-            String[] builtArgs = argList.toArray(new String[0]);
+            // immutable normalized output path
+            final String outNorm = outPath.endsWith(File.separator) ? outPath : (outPath + File.separator);
 
             runBtn.setEnabled(false);
-            log.append("Running...\n");
+            log.append("Running (" + mode + ")...\n");
 
             new Thread(() -> {
                 long t0 = System.currentTimeMillis();
                 try {
-                    ImageProcessor.main(builtArgs);
+                    if ("mpj".equals(mode)) {
+                        int np;
+                        try {
+                            np = Integer.parseInt(threadsField.getText().trim());
+                        } catch (Exception ex) {
+                            np = Math.max(2, Runtime.getRuntime().availableProcessors());
+                        }
+                        int rc = runMpj(np, inPath, outNorm, opsStr, log);
+                        final int exitCode = rc;
+                        SwingUtilities.invokeLater(() ->
+                                log.append("MPJ finished with exit code " + exitCode + "\n"));
+                    } else {
+                        List<String> argList = new ArrayList<>();
+                        argList.add(inPath);
+                        argList.add(outNorm);
+                        argList.add(opsStr);
+                        if (!"auto".equals(mode)) {
+                            if ("custom".equals(mode)) {
+                                argList.add(threadsField.getText().trim());
+                            } else {
+                                argList.add(mode);
+                            }
+                        }
+                        try {
+                            ImageProcessor.main(argList.toArray(new String[0]));
+                        } catch (InterruptedException ie) {
+                            SwingUtilities.invokeLater(() ->
+                                    log.append("Interrupted: " + ie.getMessage() + "\n"));
+                        }
+                    }
+                } catch (Throwable th) {
+                    SwingUtilities.invokeLater(() -> log.append("Error: " + th + "\n"));
+                } finally {
                     long t1 = System.currentTimeMillis();
                     SwingUtilities.invokeLater(() -> {
-                        log.append("Done. Elapsed: " + ((t1 - t0) / 1000.0) + " s\n");
-                        runBtn.setEnabled(true);
-                    });
-                } catch (InterruptedException ex) {
-                    SwingUtilities.invokeLater(() -> {
-                        log.append("Interrupted: " + ex.getMessage() + "\n");
-                        runBtn.setEnabled(true);
-                    });
-                } catch (Throwable th) {
-                    SwingUtilities.invokeLater(() -> {
-                        log.append("Error: " + th + "\n");
+                        log.append(String.format("Elapsed: %.3f s%n", (t1 - t0) / 1000.0));
                         runBtn.setEnabled(true);
                     });
                 }
             }).start();
         });
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    /**
+     * Launch mpjrun and stream its output into the GUI log.
+     * mpjrun(.bat/.sh) -np <np> -cp <currentClasspath> MpjImageProcessor <in> <out> <ops>
+     */
+    private static int runMpj(int np, String in, String out, String ops, JTextArea log)
+            throws IOException, InterruptedException {
+
+        String launcher = isWindows() ? "mpjrun.bat" : "mpjrun.sh";
+
+        // Use current classpath so compiled classes are visible
+        String cp = System.getProperty("java.class.path");
+        if (cp == null || cp.isEmpty()) cp = ".";
+
+        List<String> cmd = new ArrayList<>();
+        cmd.add(launcher);
+        cmd.add("-np"); cmd.add(String.valueOf(np));
+        cmd.add("-cp"); cmd.add(cp);
+        cmd.add("MpjImageProcessor");
+        cmd.add(in);
+        cmd.add(out);
+        cmd.add(ops);
+
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                final String ln = line;
+                SwingUtilities.invokeLater(() -> log.append(ln + "\n"));
+            }
+        }
+        return p.waitFor();
     }
 }
