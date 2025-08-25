@@ -58,17 +58,28 @@ public static void main(String[] args) // Handle errors
             current = input;
 
             long start = System.currentTimeMillis(); //time used
-            for (String op : ops) {
-                float[] kernel = Universal.getKernelByName(op.trim());
-                int kernelSize = (int) Math.sqrt(kernel.length);
+            for (String opRaw : ops) {
+                String op = opRaw.trim();
                 output = new PpmImage(current.width, current.height, current.channels, current.depth);
 
-                Worker[] workers = new Worker[numThreads];  // uses worker to acctually apply the changes
-                for (int i = 0; i < numThreads; i++)
-                    workers[i] = new Worker(i, numThreads, current, output, kernelSize, kernel);
-                for (int i = 0; i < numThreads; i++)
-                    workers[i].start();
-                for (Worker worker : workers) worker.join();
+            
+                if (op.equalsIgnoreCase("mirror")) {
+                    Worker.mirrorParallel(current, output, numThreads);
+                } else {
+                    float[] kernel = Universal.getKernelByName(op);
+                    int kernelSize = (int) Math.sqrt(kernel.length);
+
+                    if (numThreads == 1) {
+                        Worker.applyKernelSingle(current, output, kernelSize, kernel);  //SEQUENTIAL 
+                    } else {
+                        Worker[] workers = new Worker[numThreads];
+                        for (int i = 0; i < numThreads; i++)
+                            workers[i] = new Worker(i, numThreads, current, output, kernelSize, kernel);
+                        for (int i = 0; i < numThreads; i++)
+                            workers[i].start();
+                        for (Worker w : workers) w.join();
+                    }
+                }
 
                 current = output; // chain to next operation
             }
@@ -91,17 +102,27 @@ current = input;
 
 long start = System.currentTimeMillis(); //time used
 
-for (String op : ops) {
-    float[] kernel = Universal.getKernelByName(op.trim());
-    int kernelSize = (int) Math.sqrt(kernel.length);
+for (String opRaw : ops) {
+    String op = opRaw.trim();
     output = new PpmImage(current.width, current.height, current.channels, current.depth);
 
-    Worker[] workers = new Worker[numThreads];
-    for (int i = 0; i < numThreads; i++)
-        workers[i] = new Worker(i, numThreads, current, output, kernelSize, kernel);
-    for (int i = 0; i < numThreads; i++)
-        workers[i].start();
-    for (Worker worker : workers) worker.join();
+    if (op.equalsIgnoreCase("mirror")) {
+        Worker.mirrorParallel(current, output, numThreads);
+    } else {
+        float[] kernel = Universal.getKernelByName(op);
+        int kernelSize = (int) Math.sqrt(kernel.length);
+
+         if (numThreads == 1) {
+            Worker.applyKernelSingle(current, output, kernelSize, kernel);  //SEQUENTIAL 
+            } else {
+                Worker[] workers = new Worker[numThreads];
+                for (int i = 0; i < numThreads; i++)
+                     workers[i] = new Worker(i, numThreads, current, output, kernelSize, kernel);
+                for (int i = 0; i < numThreads; i++)
+                       workers[i].start();
+                for (Worker w : workers) w.join();
+            }
+    }
 
     current = output; // chain to next operation
 }
