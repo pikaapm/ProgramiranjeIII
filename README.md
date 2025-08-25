@@ -4,7 +4,7 @@
 - Can chain operations, e.g. blur+edge or blur,edge.
 - Modes: sequential, parallel, distributed, or a number of threads.
 - Simple Swing GUI included.
-- ## MPJ (MPI for Java) mode
+- MPJ (MPI for Java) mode
 This project supports a distributed implementation using **MPJ Express**.
 
 **Requirements:**
